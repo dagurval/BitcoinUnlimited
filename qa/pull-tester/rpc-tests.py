@@ -240,7 +240,8 @@ testScripts = [ RpcTest(t) for t in [
     'xversion',
     'sighashmatch',
     'getlogcategories',
-    'getrawtransaction'
+    'getrawtransaction',
+    Disabled('electrum_basics', "Needs to be skipped if electrs is not built")
 ] ]
 
 testScriptsExt = [ RpcTest(t) for t in [
