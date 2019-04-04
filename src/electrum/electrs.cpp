@@ -8,7 +8,6 @@
 #include <sstream>
 
 #include <boost/filesystem.hpp>
-#include <boost/process.hpp>
 
 static std::string monitoring_port() { return GetArg("-electrummonitoringport", "4224"); }
 namespace electrum
@@ -19,7 +18,7 @@ std::string electrs_path()
     boost::filesystem::path bitcoind_dir(this_process_path());
     bitcoind_dir = bitcoind_dir.remove_filename();
 
-    auto default_path = boost::process::search_path("electrs", {bitcoind_dir});
+    auto default_path = bitcoind_dir / "electrs";
     const std::string path = GetArg("-electrumexec", default_path.string());
 
     if (path.empty())
