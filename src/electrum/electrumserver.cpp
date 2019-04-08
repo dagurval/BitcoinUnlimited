@@ -80,30 +80,50 @@ bool ElectrumServer::Start(int rpcport, const std::string &network)
     return startup_check(*process);
 }
 
+static void stop_server(SubProcess& p) {
+    if (!p.IsRunning())
+    {
+        return;
+    }
+    LOGA("Electrum: Stopping server");
+
+    try {
+        p.Interrupt();
+    }
+    catch (const subprocess_error& e) {
+        LOGA("Electrum: %s", e.what());
+        p.Terminate();
+        return;
+    }
+
+    using namespace std::chrono_literals;
+    using namespace std::chrono;
+
+    auto timeout = 60s;
+    auto start = system_clock::now();
+    while (process->IsRunning()) {
+        if ((system_clock::now() - start) < timeout) {
+            std::this_thread::sleep_for(1s);
+            continue;
+        }
+        LOGA("Electrum: Timed out waiting for clean shutdown (%s seconds)", timeout.count());
+        p.Terminate();
+        return;
+    }
+}
+
 void ElectrumServer::Stop()
 {
-    using namespace std::chrono_literals;
-
     if (!started)
     {
         return;
     }
-    if (process->IsRunning()) {
-        LOGA("Electrum: Stopping server");
-        process->Interrupt();
-        auto timeout = 60s;
-        auto start = std::chrono::system_clock::now();
-        while (process->IsRunning()) {
-            if ((std::chrono::system_clock::now() - start) < timeout) {
-                std::this_thread::sleep_for(1s);
-                continue;
-            }
-            LOGA("Electrum: Timed out waiting for clean shutdown (%s seconds)", timeout.count());
-            process->Terminate();
-            break;
-        }
+    try {
+        stop_server(*process);
     }
-
+    catch (const exception& e) {
+        LOGA("Electrum: Error stopping server %s", e.what());
+    }
     process_thread.join();
     started = false;
 }
