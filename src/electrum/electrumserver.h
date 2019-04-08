@@ -4,6 +4,8 @@
 #include <memory>
 #include <thread>
 
+class SubProcess;
+
 namespace electrum {
 
 struct Process;
@@ -18,9 +20,8 @@ public:
 private:
     ElectrumServer();
 
-    std::unique_ptr<Process> process;
-    std::thread stdout_reader_thread;
-    std::thread stderr_reader_thread;
+    std::unique_ptr<SubProcess> process;
+    std::thread process_thread;
 
     bool started = false;
 };

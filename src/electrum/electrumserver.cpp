@@ -6,32 +6,18 @@
 #include <chrono>
 #include <string>
 
-#include <boost/process/child.hpp>
-#include <boost/process/pipe.hpp>
-#include <boost/process/io.hpp>
-
-namespace bp = boost::process;
-
-static void log_pipe(bp::ipstream &pipe)
-{
-    std::string line;
-    while (pipe && std::getline(pipe, line))
-    {
-        LOG(ELECTRUM, "Electrum: %s", line);
-    }
-}
-
 //! give the program a second to complain about startup issues, such as invalid
 //! parameters.
-static bool startup_check(bp::child &process)
+static bool startup_check(const SubProcess& p)
 {
-    auto timeout = std::chrono::seconds(1);
-    if (!process.wait_for(timeout))
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(1s);
+    if (p.IsRunning())
     {
         // process hasn't exited, good.
         return true;
     }
-    LOGA("Electrum: server exited with exit code: %d", process.exit_code());
+    LOGA("Electrum: startup check failed, server exited within 1 second");
     return false;
 }
 
@@ -54,95 +40,71 @@ static void log_args(const std::string &path, const std::vector<std::string> &ar
 namespace electrum
 {
 
-// This structs sole purpose is to avoid including boost process in the header
-// file.
-struct Process {
-    bp::child process;
-    bp::ipstream p_stdout;
-    bp::ipstream p_stderr;
-};
-
-ElectrumServer::ElectrumServer() : process(new electrum::Process) { }
+ElectrumServer::ElectrumServer() { }
 ElectrumServer::~ElectrumServer() { if (started) Stop(); }
+
+//! called when electrs produces a line in stdout/stderr
+static void callb_logger(const std::string& line) {
+    LOGA("Electrum: %s", line);
+}
 
 bool ElectrumServer::Start(int rpcport, const std::string &network)
 {
-    assert(!started);
+    DbgAssert(!started, return false);
     if (!GetBoolArg("-electrum", false))
     {
         LOGA("Electrum: Disabled. Not starting server.");
         return true;
     }
-    LOGA("Electrum: Starting server");
 
-    try
-    {
-        auto path = electrs_path();
-        auto args = electrs_args(rpcport, network);
-        log_args(path, args);
-        process->process = bp::child(path, args,
-                bp::std_out > process->p_stdout,
-                bp::std_err > process->p_stderr);
-    }
-    catch (const std::exception &e)
-    {
-        LOGA("Electrum: Unable to start server: %s", e.what());
-        return false;
-    }
+    auto path = electrs_path();
+    auto args = electrs_args(rpcport, network);
+    log_args(path, args);
+    process.reset(new SubProcess(path, args, callb_logger, callb_logger));
 
-    stderr_reader_thread = std::thread([this]() {
-        LOGA("Electrum: stderr log thread started.");
-        RenameThread("electrumstderr");
-        log_pipe(this->process->p_stderr);
+    process_thread = std::thread([this]() {
+        LOGA("Electrum: Starting server");
+        try {
+            this->process->Run();
+        }
+        catch (const subprocess_error &e)
+        {
+            LOGA("Electrum: Server not running: %s, exit status %d, termination signal %d",
+                    e.what(), e.exit_status, e.termination_signal);
+        }
+        catch (...) {
+            LOGA("Electrum: Unknown error running server");
+        }
     });
-
-    if (Logging::LogAcceptCategory(ELECTRUM))
-    {
-        stdout_reader_thread = std::thread([this]() {
-            LOG(ELECTRUM, "Electrum: stdout log thread started.");
-            RenameThread("electrumstdout");
-            log_pipe(this->process->p_stdout);
-        });
-    }
     started = true;
-    return startup_check(process->process);
+    return startup_check(*process);
 }
 
 void ElectrumServer::Stop()
 {
+    using namespace std::chrono_literals;
+
     if (!started)
     {
         return;
     }
-    LOGA("Electrum: Stopping server");
-
-    try
-    {
-        send_signal_sigterm(process->process.id());
-        auto timeout = std::chrono::seconds(60);
-        if (!process->process.wait_for(timeout))
-        {
+    if (process->IsRunning()) {
+        LOGA("Electrum: Stopping server");
+        process->Interrupt();
+        auto timeout = 60s;
+        auto start = std::chrono::system_clock::now();
+        while (process->IsRunning()) {
+            if ((std::chrono::system_clock::now() - start) < timeout) {
+                std::this_thread::sleep_for(1s);
+                continue;
+            }
             LOGA("Electrum: Timed out waiting for clean shutdown (%s seconds)", timeout.count());
+            process->Terminate();
+            break;
         }
     }
-    catch (const std::exception &e)
-    {
-        LOGA("Electrum: %s", e.what());
-    }
 
-    process->process.terminate();
-    // reader threads exit when pipes close
-    process->p_stdout.pipe().close();
-    process->p_stderr.pipe().close();
-    if (stdout_reader_thread.joinable())
-    {
-        stdout_reader_thread.join();
-    }
-    if (stderr_reader_thread.joinable())
-    {
-        stderr_reader_thread.join();
-    }
-
+    process_thread.join();
     started = false;
 }
 
