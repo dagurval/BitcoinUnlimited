@@ -5,8 +5,8 @@ import os
 import sys
 import shutil
 GIT_REPO = "https://github.com/dagurval/electrs.git"
-GIT_BRANCH = "cashacc"
-EXPECT_HEAD = "c544cc8eb4fcf63c8b42978dbd5813fe91f433a2"
+GIT_BRANCH = "txsidcache2"
+EXPECT_HEAD = "f3117617abfe9ee0c84f32d708fd972aef07c088"
 
 ROOT_DIR = os.path.realpath(
         os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
