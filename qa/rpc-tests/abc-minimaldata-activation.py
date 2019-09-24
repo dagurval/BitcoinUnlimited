@@ -11,27 +11,25 @@ on the other side of the upgrade.
 
 Derived from abc-schnorr.py
 """
-
+from test_framework.mininode import (
+        NodeConn, NetworkThread, P2PDataStore
+)
 from test_framework.blocktools import (
     create_block,
     create_coinbase,
     create_transaction,
     make_conform_to_ctor,
 )
-from test_framework.messages import (
+from test_framework.nodemessages import (
     CBlock,
     COutPoint,
     CTransaction,
     CTxIn,
     CTxOut,
     FromHex,
-    ToHex,
+    ToHex
 )
-from test_framework.mininode import (
-    network_thread_join,
-    network_thread_start,
-    P2PDataStore,
-)
+
 from test_framework.script import (
     CScript,
     OP_ADD,
@@ -39,7 +37,8 @@ from test_framework.script import (
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.txtools import pad_tx
-from test_framework.util import assert_equal, assert_raises_rpc_error
+from test_framework.util import assert_equal, assert_raises_rpc_error, p2p_port, waitFor
+import logging
 
 # the upgrade activation time, which we artificially set far into the future
 GRAVITON_START_TIME = 2000000000
@@ -64,33 +63,41 @@ def rpc_error(*, reject_code, reject_reason):
     return '{:s} (code {:d})'.format(reject_reason.decode(), reject_code)
 
 
+class P2PNode(P2PDataStore):
+    pass
+
 class SchnorrTest(BitcoinTestFramework):
+
+    def __init__(self):
+        super().__init__()
+        self.set_test_params()
 
     def set_test_params(self):
         self.num_nodes = 1
         self.block_heights = {}
-        self.extra_args = [["-gravitonactivationtime={}".format(
-            GRAVITON_START_TIME),
-            "-replayprotectionactivationtime={}".format(
-            REPLAY_PROTECTION_START_TIME)]]
+        self.extra_args = [["-consensus.forkNov2019Time={}".format(
+            GRAVITON_START_TIME), '-printtoconsole', '-debug=net']]
 
-    def bootstrap_p2p(self, *, num_connections=1):
+    def bootstrap_p2p(self, *, start_network_thread = True):
         """Add a P2P connection to the node.
 
         Helper to connect and wait for version handshake."""
-        for _ in range(num_connections):
-            self.nodes[0].add_p2p_connection(P2PDataStore())
-        network_thread_start()
-        self.nodes[0].p2p.wait_for_verack()
+        self.p2p = P2PNode()
+        self.connection = NodeConn('127.0.0.1', p2p_port(0), self.nodes[0], self.p2p)
+        self.p2p.add_connection(self.connection)
+        if start_network_thread:
+            NetworkThread().start()
+        self.p2p.wait_for_verack()
+        assert(self.p2p.connection.state == "connected")
 
-    def reconnect_p2p(self, **kwargs):
+    def reconnect_p2p(self):
         """Tear down and bootstrap the P2P connection to the node.
 
         The node gets disconnected several times in this test. This helper
         method reconnects the p2p and restarts the network thread."""
-        self.nodes[0].disconnect_p2ps()
-        network_thread_join()
-        self.bootstrap_p2p(**kwargs)
+        self.p2p.disconnect_node()
+        waitFor(10, self.p2p.disconnected)
+        self.bootstrap_p2p(start_network_thread = False)
 
     def getbestblock(self, node):
         """Get the best block. Register its height so we can use build_block."""
@@ -116,51 +123,56 @@ class SchnorrTest(BitcoinTestFramework):
         block.hashMerkleRoot = block.calc_merkle_root()
         block.solve()
         self.block_heights[block.sha256] = block_height
+        for t in block.vtx:
+            assert(len(t.serialize()) >= 100, "%s size %d" % (t, len(t.serialize())))
         return block
 
     def check_for_ban_on_rejected_tx(self, tx, reject_code=None, reject_reason=None):
         """Check we are disconnected when sending a txn that the node rejects.
 
         (Can't actually get banned, since bitcoind won't ban local peers.)"""
-        self.nodes[0].p2p.send_txs_and_test(
+        self.p2p.send_txs_and_test(
             [tx], self.nodes[0], success=False, expect_disconnect=True, reject_code=reject_code, reject_reason=reject_reason)
         self.reconnect_p2p()
 
     def check_for_no_ban_on_rejected_tx(self, tx, reject_code, reject_reason):
         """Check we are not disconnected when sending a txn that the node rejects."""
-        self.nodes[0].p2p.send_txs_and_test(
+        self.p2p.send_txs_and_test(
             [tx], self.nodes[0], success=False, reject_code=reject_code, reject_reason=reject_reason)
 
     def check_for_ban_on_rejected_block(self, block, reject_code=None, reject_reason=None):
         """Check we are disconnected when sending a block that the node rejects.
 
         (Can't actually get banned, since bitcoind won't ban local peers.)"""
-        self.nodes[0].p2p.send_blocks_and_test(
+        self.p2p.send_blocks_and_test(
             [block], self.nodes[0], success=False, reject_code=reject_code, reject_reason=reject_reason)
-        self.nodes[0].p2p.wait_for_disconnect()
+        self.p2p.wait_for_disconnect()
         self.reconnect_p2p()
 
     def run_test(self):
-        node, = self.nodes
+        import pdb
+        pdb.set_trace()
+        node = self.nodes[0]
+        node.generate(1)
 
         self.bootstrap_p2p()
 
         tip = self.getbestblock(node)
 
-        self.log.info("Create some blocks with OP_1 coinbase for spending.")
+        logging.info("Create some blocks with OP_1 coinbase for spending.")
         blocks = []
         for _ in range(10):
             tip = self.build_block(tip)
             blocks.append(tip)
-        node.p2p.send_blocks_and_test(blocks, node, success=True)
+        self.p2p.send_blocks_and_test(blocks, node, success=True)
         spendable_outputs = [block.vtx[0] for block in blocks]
 
-        self.log.info("Mature the blocks and get out of IBD.")
+        logging.info("Mature the blocks and get out of IBD.")
         node.generate(100)
 
         tip = self.getbestblock(node)
 
-        self.log.info("Setting up spends to test and mining the fundings.")
+        logging.info("Setting up spends to test and mining the fundings.")
         fundings = []
 
         def create_fund_and_spend_tx():
@@ -196,11 +208,11 @@ class SchnorrTest(BitcoinTestFramework):
         nonminimaltx_3 = create_fund_and_spend_tx()
 
         tip = self.build_block(tip, fundings)
-        node.p2p.send_blocks_and_test([tip], node)
+        self.p2p.send_blocks_and_test([tip], node)
 
-        self.log.info("Start preupgrade tests")
+        logging.info("Start preupgrade tests")
 
-        self.log.info("Sending rejected transactions via RPC")
+        logging.info("Sending rejected transactions via RPC")
         assert_raises_rpc_error(-26, rpc_error(**MINIMALPUSH_ERROR),
                                 node.sendrawtransaction, ToHex(nonminimaltx))
         assert_raises_rpc_error(-26, rpc_error(**MINIMALPUSH_ERROR),
@@ -208,7 +220,7 @@ class SchnorrTest(BitcoinTestFramework):
         assert_raises_rpc_error(-26, rpc_error(**MINIMALPUSH_ERROR),
                                 node.sendrawtransaction, ToHex(nonminimaltx_3))
 
-        self.log.info(
+        logging.info(
             "Sending rejected transactions via net (no banning)")
         self.check_for_no_ban_on_rejected_tx(
             nonminimaltx, **MINIMALPUSH_ERROR)
@@ -219,13 +231,13 @@ class SchnorrTest(BitcoinTestFramework):
 
         assert_equal(node.getrawmempool(), [])
 
-        self.log.info("Successfully mine nonstandard transaction")
+        logging.info("Successfully mine nonstandard transaction")
         tip = self.build_block(tip, [nonminimaltx])
-        node.p2p.send_blocks_and_test([tip], node)
+        self.p2p.send_blocks_and_test([tip], node)
 
         # Activation tests
 
-        self.log.info("Approach to just before upgrade activation")
+        logging.info("Approach to just before upgrade activation")
         # Move our clock to the uprade time so we will accept such future-timestamped blocks.
         node.setmocktime(GRAVITON_START_TIME)
         # Mine six blocks with timestamp starting at GRAVITON_START_TIME-1
@@ -233,39 +245,39 @@ class SchnorrTest(BitcoinTestFramework):
         for i in range(-1, 5):
             tip = self.build_block(tip, nTime=GRAVITON_START_TIME + i)
             blocks.append(tip)
-        node.p2p.send_blocks_and_test(blocks, node)
+        self.p2p.send_blocks_and_test(blocks, node)
         assert_equal(node.getblockchaininfo()[
                      'mediantime'], GRAVITON_START_TIME - 1)
 
         # save this tip for later
         preupgrade_block = tip
 
-        self.log.info(
+        logging.info(
             "Mine the activation block itself, including a minimaldata violation at the last possible moment")
         tip = self.build_block(tip, [nonminimaltx_2])
-        node.p2p.send_blocks_and_test([tip], node)
+        self.p2p.send_blocks_and_test([tip], node)
 
-        self.log.info("We have activated!")
+        logging.info("We have activated!")
         assert_equal(node.getblockchaininfo()[
                      'mediantime'], GRAVITON_START_TIME)
 
         # save this tip for later
         upgrade_block = tip
 
-        self.log.info(
+        logging.info(
             "Trying to mine a minimaldata violation, but we are just barely too late")
         self.check_for_ban_on_rejected_block(
             self.build_block(tip, [nonminimaltx_3]), **BADINPUTS_ERROR)
-        self.log.info(
+        logging.info(
             "If we try to submit it by mempool or RPC we still aren't banned")
         assert_raises_rpc_error(-26, rpc_error(**MINIMALPUSH_ERROR),
                                 node.sendrawtransaction, ToHex(nonminimaltx_3))
         self.check_for_no_ban_on_rejected_tx(
             nonminimaltx_3, **MINIMALPUSH_ERROR)
 
-        self.log.info("Mine a normal block")
+        logging.info("Mine a normal block")
         tip = self.build_block(tip)
-        node.p2p.send_blocks_and_test([tip], node)
+        self.p2p.send_blocks_and_test([tip], node)
 
 
 if __name__ == '__main__':

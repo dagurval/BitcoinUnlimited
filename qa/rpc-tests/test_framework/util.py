@@ -29,6 +29,7 @@ import urllib.parse as urlparse
 import errno
 import logging
 import traceback
+from . import test_node
 
 from . import coverage
 from .authproxy import AuthServiceProxy, JSONRPCException
@@ -56,7 +57,7 @@ class TimeoutException(Exception):
 
 def SetupPythonLogConfig():
     logOn = os.getenv("PYTHON_DEBUG")
-    level = logging.ERROR
+    level = logging.DEBUG
     if logOn=="ERROR":
         level = logging.ERROR
     if logOn=="WARN":
@@ -604,7 +605,7 @@ def start_node(i, dirname, extra_args=None, rpchost=None, timewait=None, binary=
     if COVERAGE_DIR:
         coverage.write_all_rpc_commands(COVERAGE_DIR, proxy)
 
-    return proxy
+    return test_node.TestNode(proxy, datadir)
 
 def start_nodes(num_nodes, dirname, extra_args=None, rpchost=None, binary=None,timewait=None):
     """
@@ -964,7 +965,7 @@ def try_rpc(code, message, fun, *args, **kwds):
         # JSONRPCException was thrown as expected. Check the code and message values are correct.
         if (code is not None) and (code != e.error["code"]):
             raise AssertionError(
-                "Unexpected JSONRPC error code %i" % e.error["code"])
+                "Unexpected JSONRPC error code %i (%s)" % (e.error["code"], str(e)))
         if (message is not None) and (message not in e.error['message']):
             raise AssertionError(
                 "Expected substring not found:" + e.error['message'])

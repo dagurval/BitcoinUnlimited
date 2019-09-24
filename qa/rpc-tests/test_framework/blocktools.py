@@ -30,6 +30,12 @@ def create_block(hashprev, coinbase, nTime=None, txns=None, ctor=True):
     block.calc_sha256()
     return block
 
+def make_conform_to_ctor(block):
+    for tx in block.vtx:
+        tx.rehash()
+    block.vtx = [block.vtx[0]] + \
+        sorted(block.vtx[1:], key=lambda tx: tx.getHash())
+
 def serialize_script_num(value):
     r = bytearray(0)
     if value == 0:
@@ -84,6 +90,8 @@ def create_transaction(prevtx, n, sig, value, out=PADDED_ANY_SPEND):
     for v in value:
         tx.vout.append(CTxOut(v, out))
     tx.calc_sha256()
+    if out == PADDED_ANY_SPEND:
+        assert(tx.serialize() >= 100)
     return tx
 
 
