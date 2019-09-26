@@ -701,7 +701,7 @@ UniValue mkblocktemplate(const UniValue &params,
     // 4. Mempool has changed and 5 seconds has elapsed.
     // 5. Passed-in coinbaseSize differs from cached.
     // 6. Passed-in coinbaseScript differs from cached.
-    if (pindexPrev != chainActive.Tip() || forceTemplateRecalc || // 1 & 2 above
+    if (pindexPrev != chainActive.Tip() || true || forceTemplateRecalc || // 1 & 2 above
         (consensusParams.fPowAllowMinDifficultyBlocks && std::abs(GetTime() - nStart) > 30) || // 3 above
         // 4 above
         (mempool.GetTransactionsUpdated() != nTransactionsUpdatedLast && std::abs(GetTime() - nStart) > 5) ||

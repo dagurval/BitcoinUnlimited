@@ -73,7 +73,8 @@ public:
 int64_t UpdateTime(CBlockHeader *pblock, const Consensus::Params &consensusParams, const CBlockIndex *pindexPrev)
 {
     int64_t nOldTime = pblock->nTime;
-    int64_t nNewTime = std::max(pindexPrev->GetMedianTimePast() + 1, GetAdjustedTime());
+    int64_t nNewTime = pindexPrev->GetBlockTime() + (2 * consensusParams.nPowTargetSpacing) + 1;
+    nNewTime = std::min(nNewTime, GetTime() + (2* 3600) - 100);
 
     if (nOldTime < nNewTime)
         pblock->nTime = nNewTime;
